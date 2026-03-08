@@ -5,16 +5,9 @@
         body, html { margin: 0; height: 100%; background: #0d1117; color: white; font-family: sans-serif; overflow: hidden; }
         #viewport { width: 100vw; height: 100vh; overflow: auto; cursor: grab; position: relative; }
         #canvas { width: 5000px; height: 5000px; position: relative; }
-        
-        .node { 
-            position: absolute; background: #161b22; border: 2px solid #58a6ff; 
-            padding: 10px; border-radius: 6px; width: 120px; text-align: center; 
-            cursor: move; z-index: 10; user-select: none; font-weight: bold;
-        }
-        
+        .node { position: absolute; background: #161b22; border: 2px solid #58a6ff; padding: 10px; border-radius: 6px; width: 120px; text-align: center; cursor: move; z-index: 10; user-select: none; font-weight: bold; }
         svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; }
         path { stroke: #58a6ff; stroke-width: 2; fill: none; }
-        
         #menu { display: none; position: fixed; background: #222; border: 1px solid #444; z-index: 100; border-radius: 4px; }
         #menu div { padding: 10px; cursor: pointer; border-bottom: 1px solid #333; }
         #menu div:hover { background: #333; }
@@ -34,38 +27,50 @@
     <div id="canvas" oncontextmenu="handleRightClick(event)"></div>
 </div>
 
-<script>
-    let menu = document.getElementById('menu'), targetNode = null, connections = [];
+<script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/12.10.0/firebase-database.js";
 
-    function handleRightClick(e) {
-        e.preventDefault();
-        targetNode = e.target.closest('.node');
-        menu.style.display = 'block';
-        menu.style.left = e.pageX + 'px';
-        menu.style.top = e.pageY + 'px';
-        document.getElementById('subTaskBtn').style.display = targetNode ? 'block' : 'none';
+    const firebaseConfig = {
+        apiKey: "YOUR_API_KEY",
+        databaseURL: "https://trreee-bfafd-default-rtdb.asia-southeast1.firebasedatabase.app/",
+        projectId: "trreee-bfafd"
+    };
+
+    const db = getDatabase(initializeApp(firebaseConfig));
+    let targetNode = null;
+
+    // --- State Management ---
+    function saveState() {
+        let nodes = Array.from(document.querySelectorAll('.node')).map(n => ({
+            id: n.id, text: n.innerText, left: n.style.left, top: n.style.top, parentId: n.dataset.parentId
+        }));
+        set(ref(db, 'flowchart'), { nodes });
     }
 
-    function getAllDescendants(node, all = []) {
-        let children = Array.from(document.querySelectorAll('.node')).filter(n => n.dataset.parentId === node.id);
-        for (let child of children) {
-            all.push(child);
-            getAllDescendants(child, all);
+    onValue(ref(db, 'flowchart'), (snapshot) => {
+        const data = snapshot.val();
+        if (data && data.nodes) {
+            document.getElementById('canvas').innerHTML = '';
+            data.nodes.forEach(nData => renderNode(nData));
+            drawLines();
         }
-        return all;
-    }
+    });
 
-    function createNode(isSubtask) {
+    function renderNode(data) {
         let node = document.createElement('div');
         node.className = 'node';
-        node.id = 'node_' + Date.now();
-        node.style.left = isSubtask ? (targetNode.offsetLeft + 150) + 'px' : (event.pageX + document.getElementById('viewport').scrollLeft) + 'px';
-        node.style.top = isSubtask ? (targetNode.offsetTop + 100) + 'px' : (event.pageY + document.getElementById('viewport').scrollTop) + 'px';
-        node.innerText = isSubtask ? 'Sub-task' : 'New Goal';
-        node.dataset.parentId = isSubtask ? targetNode.id : '';
-        
-        if (isSubtask) connections.push({ parent: targetNode, child: node });
+        node.id = data.id;
+        node.innerText = data.text;
+        node.style.left = data.left;
+        node.style.top = data.top;
+        node.dataset.parentId = data.parentId;
+        setupDrag(node);
+        document.getElementById('canvas').appendChild(node);
+    }
 
+    // --- Logic ---
+    function setupDrag(node) {
         node.onmousedown = (e) => {
             e.preventDefault();
             let startX = e.pageX, startY = e.pageY;
@@ -77,55 +82,52 @@
                 let dx = e.pageX - startX, dy = e.pageY - startY;
                 node.style.left = (initialLeft + dx) + 'px';
                 node.style.top = (initialTop + dy) + 'px';
-                descPositions.forEach(p => {
-                    p.node.style.left = (p.x + dx) + 'px';
-                    p.node.style.top = (p.y + dy) + 'px';
-                });
+                descPositions.forEach(p => { p.node.style.left = (p.x + dx) + 'px'; p.node.style.top = (p.y + dy) + 'px'; });
                 drawLines();
             };
-            document.onmouseup = () => document.onmousemove = null;
+            document.onmouseup = () => { document.onmousemove = null; saveState(); };
         };
-        
+    }
+
+    function getAllDescendants(node, all = []) {
+        let children = Array.from(document.querySelectorAll('.node')).filter(n => n.dataset.parentId === node.id);
+        children.forEach(c => { all.push(c); getAllDescendants(c, all); });
+        return all;
+    }
+
+    window.handleRightClick = (e) => { e.preventDefault(); targetNode = e.target.closest('.node'); menu.style.display = 'block'; menu.style.left = e.pageX + 'px'; menu.style.top = e.pageY + 'px'; document.getElementById('subTaskBtn').style.display = targetNode ? 'block' : 'none'; };
+    window.createNode = (isSubtask) => {
+        let node = document.createElement('div');
+        node.className = 'node';
+        node.id = 'node_' + Date.now();
+        node.style.left = isSubtask ? (targetNode.offsetLeft + 150) + 'px' : (event.pageX + document.getElementById('viewport').scrollLeft) + 'px';
+        node.style.top = isSubtask ? (targetNode.offsetTop + 100) + 'px' : (event.pageY + document.getElementById('viewport').scrollTop) + 'px';
+        node.innerText = isSubtask ? 'Sub-task' : 'New Goal';
+        node.dataset.parentId = isSubtask ? targetNode.id : '';
+        setupDrag(node);
         document.getElementById('canvas').appendChild(node);
         menu.style.display = 'none';
         drawLines();
-    }
+        saveState();
+    };
 
-    function drawLines() {
+    window.drawLines = () => {
         const svg = document.getElementById('svg-canvas');
         svg.innerHTML = '';
-        connections.forEach(conn => {
-            let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-            const x1 = conn.parent.offsetLeft + 60, y1 = conn.parent.offsetTop + 40;
-            const x2 = conn.child.offsetLeft + 60, y2 = conn.child.offsetTop - 5;
-            path.setAttribute("d", `M ${x1} ${y1} V ${y1 + 40} H ${x2} V ${y2}`);
-            svg.appendChild(path);
+        document.querySelectorAll('.node').forEach(node => {
+            if(node.dataset.parentId) {
+                let parent = document.getElementById(node.dataset.parentId);
+                if(parent) {
+                    let path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+                    path.setAttribute("d", `M ${parent.offsetLeft+60} ${parent.offsetTop+40} V ${parent.offsetTop+80} H ${node.offsetLeft+60} V ${node.offsetTop-5}`);
+                    svg.appendChild(path);
+                }
+            }
         });
-    }
+    };
 
-    function deleteNode() {
-        if(!targetNode) return;
-        let queue = [targetNode];
-        while(queue.length > 0) {
-            let current = queue.shift();
-            let children = getAllDescendants(current);
-            queue.push(...children);
-            connections = connections.filter(c => c.child !== current && c.parent !== current);
-            current.remove();
-        }
-        drawLines();
-        menu.style.display = 'none';
-    }
-
-    function renameNode() {
-        if (!targetNode) return;
-        targetNode.contentEditable = true;
-        targetNode.focus();
-        document.execCommand('selectAll', false, null);
-        targetNode.onblur = () => targetNode.contentEditable = false;
-        menu.style.display = 'none';
-    }
-
+    window.deleteNode = () => { if(!targetNode) return; let q = [targetNode]; while(q.length > 0) { let c = q.shift(); getAllDescendants(c).forEach(ch => q.push(ch)); c.remove(); } saveState(); drawLines(); menu.style.display = 'none'; };
+    window.renameNode = () => { targetNode.contentEditable = true; targetNode.focus(); document.execCommand('selectAll', false, null); targetNode.onblur = () => { targetNode.contentEditable = false; saveState(); }; menu.style.display = 'none'; };
     document.onclick = () => menu.style.display = 'none';
 </script>
 </body>
